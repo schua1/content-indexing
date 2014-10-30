@@ -1,3 +1,15 @@
+/*
+ * Copyright 2014 Deshang group.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 package org.deshang.content.indexing.service.impl;
 
 import java.util.ArrayList;
@@ -12,6 +24,8 @@ import org.deshang.content.indexing.repository.WpCommentRepository;
 import org.deshang.content.indexing.repository.WpPostRepository;
 import org.deshang.content.indexing.repository.WpUserRepository;
 import org.deshang.content.indexing.service.WpPostService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Transactional
 public class WpPostServiceImpl implements WpPostService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(WpPostServiceImpl.class);
 
     @Autowired
     private WpPostRepository postRepository;
@@ -31,7 +47,8 @@ public class WpPostServiceImpl implements WpPostService {
 
     @Override
     public List<WpPost> getSiteAllPublishPost(long siteId) {
-        
+
+        LOGGER.debug("Enter getSiteAllPublishPost(long)");
         List<WpUser> users = userRepository.getAllUsers();
         Map<Long, WpUser> userIdx = new HashMap<Long, WpUser>();
         for (WpUser user : users) {
@@ -69,6 +86,8 @@ public class WpPostServiceImpl implements WpPostService {
                 }
             }
         }
+
+        LOGGER.debug("Exit getSiteAllPublishPost(long)");
         return publishPosts;
     }
 

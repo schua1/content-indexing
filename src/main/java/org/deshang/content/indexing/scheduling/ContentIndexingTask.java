@@ -1,3 +1,15 @@
+/*
+ * Copyright 2014 Deshang group.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 package org.deshang.content.indexing.scheduling;
 
 import java.io.File;
@@ -20,10 +32,14 @@ import org.deshang.content.indexing.model.WpUser;
 import org.deshang.content.indexing.service.WpPostService;
 import org.deshang.content.indexing.service.WpSiteService;
 import org.deshang.content.indexing.util.lucene.LuceneIndexUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.TaskScheduler;
 
 public class ContentIndexingTask implements Runnable {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ContentIndexingTask.class);
 
     private final String FILE_SEPARATOR = System.getProperty("file.separator");
     private class UserContentIndexingTask implements Runnable {
@@ -44,25 +60,24 @@ public class ContentIndexingTask implements Runnable {
                 IndexWriter writer = util.buildRAMIndexWriter();
 
                 for (Map.Entry<Long, List<WpPost>> userPosts : userPosts.entrySet()) {
-                    System.out.println("Site with id [" + userPosts.getKey() + "] has " + userPosts.getValue().size()
-                            + " post(s).");
+                    LOGGER.debug("Site with id [" + userPosts.getKey() + "] has " + userPosts.getValue().size() + " post(s).");
                     for (WpPost post : userPosts.getValue()) {
                         writer.addDocument(util.covertWpPost2Document(post, userPosts.getKey()));
                     }
                 }
 
                 for (Map.Entry<Long, List<WpComment>> userComments : userComments.entrySet()) {
-                    System.out.println("Site with id [" + userComments.getKey() + "] has "
-                            + userComments.getValue().size() + " comment(s).");
+                    LOGGER.debug("Site with id [" + userComments.getKey() + "] has " + userComments.getValue().size() + " comment(s).");
                     for (WpComment comment : userComments.getValue()) {
                         writer.addDocument(util.covertWpComment2Document(comment, userComments.getKey()));
                     }
                 }
+
                 writer.commit();
                 util.storeIndex(writer.getDirectory(), rootPath + FILE_SEPARATOR + username);
                 writer.close();
             } catch (IOException e) {
-                e.printStackTrace();
+                LOGGER.error("Writing index for user [" + username + "] error", e);
             }
             countDown.countDown();
         }
@@ -93,20 +108,19 @@ public class ContentIndexingTask implements Runnable {
         Map<Long, List<WpPost>> allSitePosts = new HashMap<Long, List<WpPost>>();
         Map<Long, List<WpComment>> allSiteComments = new HashMap<Long, List<WpComment>>();
         for (WpSite site : sites) {
-            System.out.print("Site info: [id=" + site.getBlogId() + ";domain_path=" + site.getDomain() + site.getPath());
+            LOGGER.debug("Site info: [id=" + site.getBlogId() + ";domain_path=" + site.getDomain() + site.getPath());
             WpUser user = site.getOwner();
-            System.out.print(" User Info: [id=" + user.getId() + ";login=" + user.getLoginName() + "]");
-            System.out.println();
+            LOGGER.debug(" User Info: [id=" + user.getId() + ";login=" + user.getLoginName() + "]");
             
             List<WpPost> publishPosts = postService.getSiteAllPublishPost(site.getBlogId());
-            System.out.println("Site " + site.getPath() + " with id [" + site.getBlogId() + "] has " + publishPosts.size() + " post(s).");
+            LOGGER.debug("Site " + site.getPath() + " with id [" + site.getBlogId() + "] has " + publishPosts.size() + " post(s).");
             for (WpPost post : publishPosts) {
-                //System.out.print("Post info: [id=" + post.getId() + ";title=" + post.getTitle() + ";content=" + post.getContent() + ";");
-                if (post.getAuthorUser() != null) {
-                    //System.out.print("authorUser=" + post.getAuthorUser().getLoginName() + "]");
-                } else {
-                    //System.out.print("authorUser=null]");
-                }
+                LOGGER.debug("Post info: [id=" + post.getId()
+                                      + ";title=" + post.getTitle()
+                                      + ";content=" + post.getContent()
+                                      + ";authorUser=" + (post.getAuthorUser() != null
+                                                                  ? post.getAuthorUser().getLoginName()
+                                                                  : "null") + "]");
 
                 // add post into user post map
                 Map<Long, List<WpPost>> userPostMap = allUserPosts.get(post.getAuthorUser());
@@ -131,16 +145,14 @@ public class ContentIndexingTask implements Runnable {
                 sitePosts.add(post);
 
                 List<WpComment> comments = post.getAllComments();
-                System.out.println("Post with id [" + post.getId() + "] has " + comments.size() + " comment(s).");
+                LOGGER.debug("Post with id [" + post.getId() + "] has " + comments.size() + " comment(s).");
                 for (WpComment comment : comments) {
-                    //System.out.print("First comment info: [id=" + comment.getId() + ";content=" + comment.getContent() + ";");
                     String commentAuthorName = comment.getAuthor();
-                    if (comment.getAuthorUser() != null) {
-                        //System.out.println("authorUser=" +  comment.getAuthorUser().getLoginName() + "]");
-                        commentAuthorName = comment.getAuthorUser().getLoginName();
-                    } else {
-                        //System.out.println("authorUser=null]");
-                    }
+                    LOGGER.debug("Comment info: [id=" + comment.getId()
+                                             + ";content=" + comment.getContent()
+                                             + ";authorUser=" + (comment.getAuthorUser() != null
+                                                                         ? comment.getAuthorUser().getLoginName()
+                                                                         : "null") + "]");
 
                     Map<Long, List<WpComment>> userCommentMap = allUserComments.get(commentAuthorName);
                     if (userCommentMap == null) {
@@ -183,20 +195,21 @@ public class ContentIndexingTask implements Runnable {
         try {
             countDown.await();
         } catch (InterruptedException e) {
+            LOGGER.error("Waiting all count down latch error", e);
             e.printStackTrace();
         }
-        
-        try {
-            File rootDir = new File(rootPath);
-            File[] indices = rootDir.listFiles();
-            for (File index : indices) {
-                System.out.println("Read index from folder " + index.getCanonicalPath());
+
+        File rootDir = new File(rootPath);
+        File[] indices = rootDir.listFiles();
+        for (File index : indices) {
+            try {
+                LOGGER.debug("Read index from folder " + index.getCanonicalPath());
                 IndexReader reader = DirectoryReader.open(FSDirectory.open(index));
-                System.out.println("Total " + reader.numDocs() + " document(s) indexed.");
+                LOGGER.debug("Total " + reader.numDocs() + " document(s) indexed.");
                 reader.close();
+            } catch (IOException e) {
+                LOGGER.error("Reading index for user error", e);
             }
-        } catch (IOException e) {
-            e.printStackTrace();
         }
     }
 }
