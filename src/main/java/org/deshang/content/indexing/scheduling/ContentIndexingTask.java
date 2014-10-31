@@ -13,6 +13,7 @@
 package org.deshang.content.indexing.scheduling;
 
 import java.io.File;
+import java.io.FilenameFilter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
@@ -21,10 +22,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
+import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.FilterAtomicReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.BytesRef;
 import org.deshang.content.indexing.model.WpComment;
 import org.deshang.content.indexing.model.WpPost;
 import org.deshang.content.indexing.model.WpSite;
@@ -42,6 +49,8 @@ public class ContentIndexingTask implements Runnable {
     private static final Logger LOGGER = LoggerFactory.getLogger(ContentIndexingTask.class);
 
     private final String FILE_SEPARATOR = System.getProperty("file.separator");
+    private final String INDEX_TOTAL_PATH_NAME = "root";
+
     private class UserContentIndexingTask implements Runnable {
         
         private String username;
@@ -180,7 +189,7 @@ public class ContentIndexingTask implements Runnable {
 
         countDown = new CountDownLatch(allUserPosts.size() + 1);
 
-        taskScheduler.schedule(new UserContentIndexingTask("root", allSitePosts, allSiteComments) , new Date());
+        taskScheduler.schedule(new UserContentIndexingTask(INDEX_TOTAL_PATH_NAME, allSitePosts, allSiteComments) , new Date());
         
         for (Map.Entry<WpUser, Map<Long, List<WpPost>>> userPostMapEntry : allUserPosts.entrySet()) {
             Map<Long, List<WpPost>> userPosts = userPostMapEntry.getValue();
@@ -199,17 +208,110 @@ public class ContentIndexingTask implements Runnable {
             e.printStackTrace();
         }
 
+        File totalDir = new File(rootPath + FILE_SEPARATOR + INDEX_TOTAL_PATH_NAME);
+        TermDocFreqStatistics totalStatistics = new TermDocFreqStatistics();
+        try {
+            IndexReader reader = DirectoryReader.open(FSDirectory.open(totalDir));
+            calcPersonTermDocFreqInfo(totalStatistics, reader);
+            totalStatistics.switchPersonToTotal();
+        } catch (IOException e) {
+            LOGGER.error("Reading index for user error", e);
+        }
+
         File rootDir = new File(rootPath);
-        File[] indices = rootDir.listFiles();
+        File[] indices = rootDir.listFiles(new FilenameFilter() {
+            @Override
+            public boolean accept(File dir, String name) {
+                return !INDEX_TOTAL_PATH_NAME.equals(name);
+            }});
+
+        Map<String, TermDocFreqStatistics> userStatistics = new HashMap<String, TermDocFreqStatistics>();
         for (File index : indices) {
+            TermDocFreqStatistics personStatistics = totalStatistics.clone();
+            userStatistics.put(index.getName(), personStatistics);
             try {
-                LOGGER.debug("Read index from folder " + index.getCanonicalPath());
                 IndexReader reader = DirectoryReader.open(FSDirectory.open(index));
-                LOGGER.debug("Total " + reader.numDocs() + " document(s) indexed.");
-                reader.close();
+                calcPersonTermDocFreqInfo(personStatistics, reader);
             } catch (IOException e) {
                 LOGGER.error("Reading index for user error", e);
             }
+        }
+        
+        LOGGER.debug("Total terms' statistics are as following.");
+        for (String term : totalStatistics.getAllTotalTerms()) {
+            
+            LOGGER.debug("Term=" + term
+                     + "; DocFreq=" + totalStatistics.getTermPersonDocFreq(term)
+                     + "; DocFreqPercent=" + totalStatistics.getTermPersonDocFreqPercent(term)
+                     + "; TotalDocFreq=" + totalStatistics.getTermTotalDocFreq(term)
+                     + "; TotalDocFreqPercent=" + totalStatistics.getTermTotalDocFreqPercent(term));
+        }
+
+        Map<String, Map<String, String>> usersPopTerms = new HashMap<String, Map<String, String>>();
+        for (Map.Entry<String, TermDocFreqStatistics> entry : userStatistics.entrySet()) {
+            LOGGER.debug("User " + entry.getKey() + " terms' statistics are as following.");
+            TermDocFreqStatistics statistics = entry.getValue();
+            
+            Map<String, String> userPopTerms = usersPopTerms.get(entry.getKey());
+            if (userPopTerms == null) {
+                userPopTerms = new HashMap<String, String>();
+                usersPopTerms.put(entry.getKey(), userPopTerms);
+            }
+            for (String term : statistics.getAllPersonTerms()) {
+                
+                LOGGER.debug("Term=" + term
+                         + "; DocFreq=" + statistics.getTermPersonDocFreq(term)
+                         + "; DocFreqPercent=" + statistics.getTermPersonDocFreqPercent(term)
+                         + "; TotalDocFreq=" + statistics.getTermTotalDocFreq(term)
+                         + "; TotalDocFreqPercent=" + statistics.getTermTotalDocFreqPercent(term));
+                
+                double userTermShare = ((double) statistics.getTermPersonDocFreq(term)) / statistics.getTermTotalDocFreq(term);
+                if (statistics.getTermPersonDocFreqPercent(term) > .25
+                        && userTermShare < .90
+                        && statistics.getTermTotalDocFreqPercent(term) < .75) {
+                    String termFeatures = statistics.getTermPersonDocFreq(term)
+                                  + "|" + statistics.getTermPersonDocFreqPercent(term)
+                                  + "|" + statistics.getTermTotalDocFreq(term)
+                                  + "|" + statistics.getTermTotalDocFreqPercent(term);
+                    userPopTerms.put(term, termFeatures);
+                }
+            }
+        }
+        
+        for (Map.Entry<String, Map<String, String>> entry : usersPopTerms.entrySet()) {
+            LOGGER.info("User " + entry.getKey() + " popular terms' statistics are as following.");
+            for (Map.Entry<String, String> termFeatures : entry.getValue().entrySet()) {
+                LOGGER.info("Term=" + termFeatures.getKey()
+                        + "; Features=" + termFeatures.getValue());
+            }
+            
+        }
+    }
+
+    private void calcPersonTermDocFreqInfo(TermDocFreqStatistics statistics, IndexReader reader) throws IOException {
+        long docNum = reader.numDocs();
+        LOGGER.debug("Total number of documents is " + docNum + ".");
+        List<AtomicReaderContext> atomicCtxList = reader.leaves();
+        for (AtomicReaderContext ctx : atomicCtxList) {
+            FilterAtomicReader far = new FilterAtomicReader(ctx.reader());
+            for (String field : far.fields()) {
+                Terms terms = far.fields().terms(field);
+                LOGGER.debug("Reader [" + far.toString() + "] totally has " + terms.size() + " term(s).");
+                TermsEnum termsEnum = terms.iterator(null);
+                BytesRef term = null;
+                while ((term = termsEnum.next()) != null) {
+                    String termUtf8String = term.utf8ToString();
+                    int existPersonDocFreq = statistics.getTermPersonDocFreq(termUtf8String);
+                    int personDocFreq = far.docFreq(new Term(field, term));
+                    double personDocFreqPercent = ((double) personDocFreq) / docNum;
+                    if (existPersonDocFreq < 0) {
+                        personDocFreq += statistics.getTermPersonDocFreq(termUtf8String);
+                        personDocFreqPercent += statistics.getTermPersonDocFreqPercent(termUtf8String);
+                    }
+                    statistics.putTermPersonDocFreqInfo(termUtf8String, personDocFreq, personDocFreqPercent);
+                }
+            }
+            far.close();
         }
     }
 }
